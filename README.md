@@ -1,4 +1,4 @@
-﻿# Atlanta Regional Economic Study
+﻿# Atlanta Regional Economic Modeling
 
 **Industry Structure, Employment Growth, and Regional Forecasting**
 
