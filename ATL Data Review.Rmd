@@ -1,0 +1,960 @@
+---
+title: "Atlanta Regional Economic Modeling"
+subtitle: "Employment Growth and Regional Forecasting"
+author: "Wataru Hoeltermann"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 4
+---
+Initiated: 10/29/2026
+
+# Purpose and Scope
+
+This study examines regional economic conditions across metropolitan Atlanta, with an emphasis on industrial structure, employment, and interindustry economic relationships.
+
+The analysis will establish a historical economic baseline and develop a regional input-output model to evaluate industry dependencies, economic multipliers, and potential responses to changes in final demand.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r latex-setup, eval=FALSE}
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+if (!"tinytex" %in% rownames(installed.packages()) ||
+    packageVersion("tinytex") < "0.60") {
+  install.packages("tinytex")
+}
+
+if (Sys.which("pdflatex") == "") {
+  tinytex::install_tinytex(
+    version = "latest",
+    force = TRUE,
+    extra_packages = NULL
+  )
+}
+```
+
+
+```{r loadpackages, include=FALSE}
+#change eval=TRUE if first time running this code
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+install.packages("pacman")
+
+pacman::p_load(knitr)
+pacman::p_load(rmarkdown)
+pacman::p_load(modelsummary)
+pacman::p_load(dplyr)
+pacman::p_load(ggplot2)
+pacman::p_load(skimr)
+pacman::p_load(tinytex)
+```
+
+
+
+**Study specifications:**
+
+- **Geographic coverage:** Atlanta Regional Commission's expanded 21-county modeling area, approximated using complete county boundaries.
+- **Temporal coverage:** Annual economic indicators from 2015–2025, subject to data availability and comparability, with 2019 serving as a pre-pandemic benchmark.
+- **Model period:** A single input-output benchmark year, selected according to the availability and compatibility of economic transaction data.
+- **Industry classification:** Harmonized industry categories across BLS, BEA, and other relevant sources.
+
+## REMI Model: Output and Demand
+
+### Theoretical Framework
+
+The proposed model draws primarily from **Block 1: Output and Demand** of REMI's *Model Equations*, Version 3.1 (2023).
+
+REMI decomposes industry demand into intermediate inputs, consumption, investment, government expenditures, and exogenous policy adjustments:
+
+$$
+D_{i,t}^{k} =
+DLI_{i,t}^{k} +
+DLC_{i,t}^{k} +
+DLINV_{i,t}^{k} +
+DLG_{i,t}^{k} +
+DEMPOL_{i,t}^{k}
+\tag{1}
+$$
+
+Where:
+
+- $D_{i,t}^{k}$: Total demand for industry $i$ in region $k$ at time $t$.
+- $DLI_{i,t}^{k}$: Intermediate demand from other industries.
+- $DLC_{i,t}^{k}$: Consumption demand.
+- $DLINV_{i,t}^{k}$: Investment demand.
+- $DLG_{i,t}^{k}$: Government demand.
+- $DEMPOL_{i,t}^{k}$: Exogenous final-demand policy adjustment.
+- $i$: Industry classification.
+- $k$: Geographic region.
+- $t$: Time period.
+
+*Source: REMI (2023), Block 1, Equation (1-2), p. 22.*
+
+This specification identifies the principal sources of industrial demand. REMI additionally determines how production is distributed across regions through market shares, trade relationships, and adjustments in economic conditions.
+
+Our implementation will retain the input-output relationships while treating regional purchasing patterns and final demand as externally specified.
+
+## Tools: Input-Output Analysis (`ioanalysis`)
+
+The study will use the R package `ioanalysis` to implement a regional input-output (I-O) model. The framework examines transactions between industries and estimates the direct and indirect production requirements associated with changes in economic demand.
+
+The approach is informed by Regional Economic Models, Inc. (REMI), whose broader modeling framework integrates input-output relationships with econometrics, economic geography, and dynamic economic adjustment.
+
+Unlike REMI, the proposed model will focus on static interindustry relationships rather than forecasting the simultaneous adjustment of regional economic conditions.
+
+### Model Specification
+
+The Atlanta model will use a simplified input-output framework based on the interindustry production relationships represented in REMI's Output and Demand model.
+
+Regional industry output is specified as:
+
+$$
+Q_i^k = \sum_{j=1}^{n} a_{ij}^k Q_j^k + Y_i^k
+\tag{2-1}
+$$
+
+Where:
+
+- $Q_i^k$: Total gross output of industry $i$ in region $k$, measured in dollars.
+- $a_{ij}^k$: Input from industry $i$ required per dollar of output produced by industry $j$ within the region.
+- $Q_j^k$: Total gross output of industry $j$ in region $k$.
+- $Y_i^k$: Final demand for goods and services produced by industry $i$ within the region, including demand from outside Atlanta.
+- $i$: Industry supplying the product or service.
+- $j$: Industry purchasing intermediate inputs.
+- $n$: Number of industries included in the model.
+- $k$: Atlanta's 21-county study area.
+
+The model expresses industry output as the sum of intermediate demand from other industries and final demand.
+
+Following REMI's notation convention, industry output is represented by $Q$. However, Equation (2-1) is a simplified Leontief input-output relationship, rather than a direct reproduction of REMI's full output equation.
+
+The model will use national input-output relationships adjusted for Atlanta's industrial structure and regional purchasing patterns. Regional employment effects will be estimated using industry-specific employment-to-output coefficients.
+
+
+#### Illustrative Model Implementation
+
+The following example demonstrates how Equation (2-1) can be represented using `ioanalysis`. Three hypothetical industries are used to illustrate the relationship between intermediate transactions, gross output, and final demand.
+
+```{r atlanta-io-model-example, echo=TRUE, eval=FALSE}
+# i, j: Supplying and purchasing industries
+atl_io_sectors <- c("Manufacturing", "Services", "Construction")
+
+# Z[i,j]: Intermediate transactions between industries
+atl_io_Z <- matrix(c(
+  20, 10,  4,
+   5, 25, 12,
+   8,  6, 10
+), nrow = 3, byrow = TRUE,
+   dimnames = list(atl_io_sectors, atl_io_sectors))
+
+# Q[i]: Gross industry output
+atl_io_X <- c(120, 150, 100)
+
+# Y[i]: Final demand for each industry's output
+atl_io_Y <- atl_io_X - rowSums(atl_io_Z)
+
+# k: Geographic region
+atl_io_labels <- cbind(
+  Region = rep("Atlanta", 3),
+  Industry = atl_io_sectors
+)
+
+# Initialize the input-output model
+atlanta_io <- ioanalysis::as.inputoutput(
+  Z = atl_io_Z,
+  X = atl_io_X,
+  RS_label = atl_io_labels
+)
+
+# a[i,j]: Technical input coefficients
+atlanta_io$A
+
+# Output multipliers
+ioanalysis::multipliers(atlanta_io, multipliers = "output")
+```
+
+#### Numerical Illustration
+
+For the hypothetical manufacturing industry, Equation (2-1) becomes:
+
+$$
+\underbrace{120}_{Q_i^k}
+=
+\underbrace{20 + 10 + 4}_{\sum_{j=1}^{n}a_{ij}^k Q_j^k}
++
+\underbrace{86}_{Y_i^k}
+$$
+
+Where:
+
+- **120:** Total manufacturing gross output.
+- **20:** Manufacturing output purchased by manufacturing firms.
+- **10:** Manufacturing output purchased by service firms.
+- **4:** Manufacturing output purchased by construction firms.
+- **86:** Remaining manufacturing output supplied to final demand.
+- **34:** Total intermediate demand for manufacturing output across the three industries.
+
+The example illustrates that gross industry output equals intermediate demand plus final demand. The transaction matrix records purchases between industries, while `ioanalysis` uses these transactions and gross output to calculate the corresponding technical coefficients.
+
+*Note: All values are hypothetical and expressed in millions of dollars. They are intended solely to demonstrate the model structure and do not represent observed economic activity in metropolitan Atlanta. The example code is displayed but not executed.*
+
+
+
+### Model Classification
+
+| Specification | Initial Approach |
+|:---|:---|
+| Model type | Regional input-output analysis |
+| Geographic unit | Atlanta 21-county study area |
+| Model structure | Single-region, multiple industries |
+| Industry classification | Harmonized NAICS-based industry groups |
+| Time dimension | Static benchmark year |
+| Primary outcomes | Gross industry output and employment |
+| Economic mechanisms | Direct and indirect interindustry effects |
+| Scenario approach | Exogenous changes in final demand |
+| Estimation method | Input-output accounting, not regression |
+
+### Data Requirements
+
+| Data Source | Principal Variables | Model Application |
+|:---|:---|:---|
+| BEA Input-Output Accounts | Industry transactions, gross output, final demand | Establish interindustry production relationships |
+| BEA Regional Economic Accounts | Regional GDP, industry economic activity | Benchmark Atlanta's economic structure |
+| BLS QCEW | Employment, wages, establishments, NAICS classifications | Estimate employment coefficients and examine industry structure |
+| U.S. Census Bureau | Population, household income, workforce characteristics | Provide regional socioeconomic context |
+| Regional Purchasing Estimates | Local purchasing shares, imports, interregional trade | Adjust national coefficients for regional economic leakage |
+
+The model requires a regionalized input-output transaction matrix. National input-output coefficients will be adjusted using regional economic information and explicitly stated purchasing assumptions.
+
+QCEW employment and BEA regional GDP alone are insufficient to establish these relationships, since GDP measures value added rather than gross industry output.
+
+## Expected Analytical Outputs
+
+The initial model will evaluate:
+
+1. **Industry structure:** Distribution of regional gross output and employment across industries.
+2. **Economic linkages:** Direct and indirect production relationships between industries.
+3. **Output multipliers:** Changes in total regional output associated with changes in final demand.
+4. **Employment effects:** Estimated employment requirements associated with changes in industry output.
+5. **Scenario sensitivity:** Differences in estimated impacts under alternative regional purchasing and production assumptions.
+
+## Model Limitations and Uncertainty
+
+The proposed model represents the input-output relationships underlying REMI's Output and Demand framework but does not reproduce its broader economic adjustment mechanisms.
+
+| Dimension | Atlanta I-O Model | REMI |
+|:---|:---|:---|
+| Industry production | Fixed input coefficients | Interindustry relationships with broader economic feedbacks |
+| Employment | Fixed employment-output coefficients | Labor demand, productivity, and labor supply adjustments |
+| Prices and wages | Exogenous | Endogenous adjustments |
+| Population and migration | External indicators | Integrated demographic and migration relationships |
+| Regional trade | Fixed purchasing assumptions | Market shares responding to relative costs and accessibility |
+| Forecasting | Conditional demand scenarios | Dynamic multiyear forecasts |
+
+The principal sources of uncertainty include:
+
+- **Regionalization:** National production relationships may not accurately reflect Atlanta's supply chains.
+- **Industry compatibility:** BEA and QCEW classifications may require aggregation and reconciliation.
+- **Economic leakage:** Imports and purchases outside the study area reduce regional production effects.
+- **Production constraints:** Fixed input coefficients do not account for technological substitution or limitations in labor and capital availability.
+- **Temporal stability:** A single benchmark-year model cannot independently capture long-term structural changes or dynamic economic adjustment.
+
+Accordingly, estimates will represent **conditional economic impacts under specified demand assumptions**, rather than causal effects or independent forecasts of regional economic conditions.
+
+## Methodological References
+
+- Regional Economic Models, Inc. (2023). *Model Equations*, Version 3.1, Block 1: Output and Demand, pp. 21–24. https://www.remi.com/wp-content/uploads/2024/08/Model-Equations-v3_1.pdf
+- Wade, J., and Sarmiento-Barbieri, I. *ioanalysis: Input Output Analysis*, R package. https://cran.r-project.org/package=ioanalysis
+- Regional Economic Models, Inc. *Frequently Asked Questions*. https://www.remi.com/faq
+
+# Data and Preparation
+
+Primary sources:
+- BLS Quarterly Census of Employment and Wages
+- BEA Regional Economic Accounts
+- U.S. Census Bureau
+
+```{r geography, include=FALSE}
+# ARC's 21-county modeling region.
+county_codes <- c(
+  Barrow   = "13013",
+  Bartow   = "13015",
+  Carroll  = "13045",
+  Cherokee = "13057",
+  Clayton  = "13063",
+  Cobb     = "13067",
+  Coweta   = "13077",
+  Dawson   = "13085",
+  DeKalb   = "13089",
+  Douglas  = "13097",
+  Fayette  = "13113",
+  Forsyth  = "13117",
+  Fulton   = "13121",
+  Gwinnett = "13135",
+  Hall     = "13139",
+  Henry    = "13151",
+  Newton   = "13217",
+  Paulding = "13223",
+  Rockdale = "13247",
+  Spalding = "13255",
+  Walton   = "13297"
+)
+
+years <- 2015:2025
+
+# Standard two-digit NAICS sectors.
+sectors <- c(
+  "11", "21", "22", "23", "31-33",
+  "42", "44-45", "48-49", "51",
+  "52", "53", "54", "55", "56",
+  "61", "62", "71", "72", "81", "92"
+)
+
+# Industry code 10 is the all-industry total.
+industry_codes <- c("10", sectors)
+
+
+cat("Counties:", length(county_codes), "\n")
+cat("Years:", paste(years, collapse = ", "), "\n")
+```
+
+
+## BLS QCEW (Quarterly Census of Employment and Wages)
+```{r download-qcew}
+# Download Fulton County's 2024 QCEW data
+dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
+
+# url: BLS data source
+url <- "https://data.bls.gov/cew/data/api/2024/a/area/13121.csv"
+
+# file: Local destination
+file <- "data/raw/qcew_fulton_2024.csv"
+
+download.file(url, file, mode = "wb")
+```
+
+```{r review-fulton, include=FALSE}
+qcew_fulton_2024 <- read.csv(file)
+
+View(modelsummary::datasummary_skim(
+  qcew_fulton_2024,
+  type = "numeric",
+  output = "data.frame"
+))
+```
+
+### QCEW Data and Study Coverage
+
+**Source:** U.S. Bureau of Labor Statistics (BLS)  
+**Geographic coverage:** Atlanta's 21-county study area  
+**Study period:** 2015–2025 (11 annual observations per county)  
+**Expected coverage:** 231 county-year combinations  
+**Industry classification:** North American Industry Classification System (NAICS)
+
+QCEW provides establishment-based employment and payroll information for jobs covered by unemployment insurance and federal civilian employment programs.
+
+Within the Atlanta input-output model, QCEW will be used to describe regional employment and industry structure and, subsequently, to estimate employment requirements relative to industry gross output.
+
+QCEW does not directly measure interindustry transactions, final demand, or gross industry output. These components require additional economic data.
+
+### QCEW Data Dictionary
+
+| Variable | Description | Application to I-O Model |
+|:---|:---|:---|
+| `area_fips` | County FIPS identifier | Define the geographic region ($k$) |
+| `year` | Reference year | Identify observation period ($t$) |
+| `industry_code` | NAICS industry classification | Identify supplying and purchasing industries ($i$, $j$) |
+| `annual_avg_emplvl` | Average number of covered jobs | Measure industry employment |
+| `annual_avg_estabs` | Average number of establishments | Examine industry structure |
+| `total_annual_wages` | Total annual payroll (USD) | Evaluate industry labor costs |
+| `annual_avg_wkly_wage` | Average weekly wage per covered job (USD) | Examine compensation |
+| `own_code` | Ownership classification | Identify public, private, and combined records |
+| `size_code` | Establishment size classification | Identify establishment-size categories |
+| `agglvl_code` | Geographic and industry aggregation level | Identify comparable industry records |
+| `disclosure_code` | Disclosure status | Identify confidential or suppressed observations |
+
+### Complete QCEW Data Collection
+
+Following the Fulton County verification, the study will retrieve annual QCEW data for all 21 counties over 2015–2025.
+
+Historical annual archives are used to maintain a consistent data source throughout the study period. Previously downloaded archives will be reused.
+
+
+```{r test-barrow-2015}
+url <- "https://data.bls.gov/cew/data/files/2015/csv/2015_annual_by_area.zip"
+file <- "data/raw/qcew_2015_annual_by_area.zip"
+
+if (!file.exists(file)) download.file(url, file, mode = "wb")
+
+archive_files <- unzip(file, list = TRUE)$Name
+
+# Examine the actual filenames
+grep("Georgia.csv", archive_files, value = TRUE)[1:10]
+
+# Search for Barrow County (13013)
+grep("13013", archive_files, value = TRUE)
+```
+
+
+
+```{r download-qcew-full, include=FALSE}
+dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
+
+qcew_records <- list()
+
+for (year in years) {
+  url <- paste0(
+    "https://data.bls.gov/cew/data/files/", year,
+    "/csv/", year, "_annual_by_area.zip"
+  )
+
+  file <- paste0("data/raw/qcew_", year, "_annual_by_area.zip")
+
+  if (!file.exists(file)) download.file(url, file, mode = "wb")
+
+  archive_files <- unzip(file, list = TRUE)$Name
+
+  for (county in county_codes) {
+
+    # Match county FIPS in BLS archive filenames (e.g., 2015.annual 13013 Barrow County, Georgia.csv)
+    entry <- archive_files[
+      grepl(paste0(" ", county, " "), archive_files, fixed = TRUE) &
+      grepl("\\.csv$", archive_files)
+    ]
+
+    qcew_records[[paste(year, county, sep = "_")]] <- read.csv(
+      unz(file, entry),
+      colClasses = c(
+        area_fips = "character",
+        industry_code = "character"
+      )
+    )
+  }
+}
+
+qcew_raw <- do.call(rbind, qcew_records)
+```
+
+
+
+### Initial Data Review
+
+The initial review evaluates data coverage, employment levels, establishment counts, payroll, and industry classifications.
+
+#### Complete Descriptive Statistics
+
+The full numeric summary is retained in the R environment for inspection but excluded from the knitted report.
+
+```{r descriptive-stats-qcew}
+qcew_descriptive_stats <- modelsummary::datasummary_skim(
+  qcew_raw,
+  type = "numeric",
+  output = "data.frame",
+  fun_numeric = list(
+    N = function(x) sum(!is.na(x)),
+    Mean = function(x) mean(x, na.rm = TRUE),
+    SD = function(x) sd(x, na.rm = TRUE),
+    Min = function(x) min(x, na.rm = TRUE),
+    Median = function(x) median(x, na.rm = TRUE),
+    Max = function(x) max(x, na.rm = TRUE)
+  )
+)
+
+knitr::kable(
+  qcew_descriptive_stats,
+  caption = "Descriptive Statistics: QCEW 2015–2025",
+  digits = 2
+)
+```
+
+
+#### Industry Employment Distribution
+
+Employment share measures the percentage of Atlanta's total covered jobs associated with each NAICS industry sector. This identifies the relative importance of industries within the regional labor market.
+
+
+```{r qcew-employment-share}
+qcew_2025 <- qcew_raw |>
+  dplyr::filter(year == 2025, size_code == 0)
+
+qcew_total_jobs_2025 <- qcew_2025 |>
+  dplyr::filter(own_code == 0, industry_code == "10") |>
+  dplyr::summarise(jobs = sum(annual_avg_emplvl)) |>
+  dplyr::pull(jobs)
+
+qcew_sector_share_2025 <- qcew_2025 |>
+  dplyr::filter(
+    own_code %in% c(1, 2, 3, 5),
+    agglvl_code == 74,
+    industry_code %in% sectors,
+    disclosure_code != "N"
+  ) |>
+  dplyr::group_by(industry_code, industry_title) |>
+  dplyr::summarise(
+    `Covered Jobs` = sum(annual_avg_emplvl),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    `Employment Share (%)` = 100 * `Covered Jobs` / qcew_total_jobs_2025
+  ) |>
+  dplyr::arrange(dplyr::desc(`Covered Jobs`))
+
+knitr::kable(
+  qcew_sector_share_2025,
+  digits = 1,
+  format.args = list(big.mark = ","),
+  caption = "Atlanta Regional Employment by NAICS Sector, 2025"
+)
+```
+
+
+*Note: Employment shares use total covered employment across the 21 counties as the denominator. Suppressed industry observations are excluded from sector employment totals, so the reported sector shares may not sum to 100%.*
+
+
+*Note: Descriptive statistics are calculated from raw QCEW records, which contain overlapping industry and ownership classifications. They describe the downloaded data and should not be interpreted as regional employment totals.*
+
+### Data Coverage and Validation
+
+The primary validation requirement is the presence of all 21 counties for each year from 2015 through 2025.
+
+```{r qcew-coverage}
+qcew_county_year <- unique(
+  qcew_raw[, c("area_fips", "year")]
+)
+
+qcew_coverage <- aggregate(
+  area_fips ~ year,
+  data = qcew_county_year,
+  FUN = length
+)
+
+names(qcew_coverage) <- c("Year", "Counties Present")
+
+knitr::kable(
+  qcew_coverage,
+  caption = "QCEW Geographic Coverage by Year"
+)
+
+cat(
+  "County-year combinations:",
+  nrow(qcew_county_year),
+  "of", length(county_codes) * length(years), "\n"
+)
+
+cat(
+  "Suppressed raw records:",
+  sum(qcew_raw$disclosure_code == "N", na.rm = TRUE), "\n"
+)
+```
+
+### Initial Observations and Assumptions
+- **Observation level:** Each observation, or QCEW record, represents a particiular industry (NAICS), in county, under ownership classification and establishment-sized category.
+- **Geographic coverage:** The target is 21 counties observed annually from 2015 through 2025, yielding 231 county-year combinations.
+- **Employment:** Annual average employment measures covered jobs rather than unique employed residents or the employment-to-population ratio.
+- **Establishments:** Annual average establishments measure business locations or reporting establishments, not necessarily distinct firms.
+- **Industry classifications:** QCEW contains overlapping industry aggregation levels. Comparable, nonoverlapping NAICS categories will be selected before regional aggregation.
+- **Data suppression:** Confidentiality restrictions may prevent the disclosure of certain industry employment and wage measures. Suppressed records should not be treated as zero employment.
+- **Historical comparability:** NAICS revisions during the study period require attention when comparing industries across years.
+- **Model compatibility:** Industry employment will be linked to compatible gross output estimates to construct employment-to-output coefficients.
+
+The initial review establishes the availability and structure of QCEW observations before their use in the regional input-output model.
+
+
+## BEA Regional Economic Accounts
+
+### BEA Data and Study Coverage
+
+**Source:** U.S. Bureau of Economic Analysis (BEA)  
+**Dataset:** CAGDP2, Gross Domestic Product by County  
+**Geographic coverage:** Atlanta's 21-county study area  
+**Study period:** 2015–2025  
+**Currently available:** 2015–2024  ; 2025 scheduled for release on December 2, 2026.
+**Industry classification:** BEA industry classifications based on NAICS
+
+BEA provides estimates of economic production and value added across industries and geographic areas.
+
+Within the Atlanta regional input-output model, county GDP will help establish the region's economic structure and provide an external benchmark for industry activity.
+
+GDP measures value added rather than gross output. Consequently, these observations cannot be substituted directly for the gross industry output variable $Q_i^k$ in Equation (2-1).
+
+### Initial BEA Download and Verification
+
+Following the QCEW procedure, Fulton County will be examined first to verify the downloaded data structure.
+
+```{r download-bea, include=FALSE}
+dir.create("data/raw", recursive = TRUE, showWarnings = FALSE)
+
+url <- "https://apps.bea.gov/regional/zip/CAGDP2.zip"
+file <- "data/raw/bea_CAGDP2.zip"
+
+if (!file.exists(file)) download.file(url, file, mode = "wb")
+
+archive_files <- unzip(file, list = TRUE)$Name
+
+entry <- grep("CAGDP2_GA_.*\\.csv$", archive_files, value = TRUE)
+
+if (length(entry) == 0) {
+  entry <- grep("CAGDP2__ALL_AREAS_.*\\.csv$",
+                archive_files, value = TRUE)
+}
+
+if (length(entry) != 1) {
+  stop("BEA CAGDP2 CSV not identified. Check archive filenames.")
+}
+
+bea_ga <- read.csv(
+  unz(file, entry),
+  colClasses = c(GeoFIPS = "character"),
+  check.names = FALSE
+)
+```
+
+```{r review-bea-fulton, eval=FALSE}
+bea_fulton_2024 <- bea_ga[
+  trimws(bea_ga$GeoFIPS) == "13121",
+]
+
+if (interactive()) View(bea_fulton_2024)
+```
+
+### BEA Data Dictionary
+
+
+### BEA Data Dictionary
+
+**Source file:** BEA CAGDP2 CSV (Gross Domestic Product by County)[^bea-source]
+
+| Variable | Description | Application to I-O Model |
+|:---|:---|:---|
+| `GeoFIPS` | Geographic identification code for the reporting area | Define the regional study area ($k$) |
+| `GeoName` | Name of the geographic area | Identify counties |
+| `Region` | BEA regional classification identifier | Identify broader geographic groupings |
+| `TableName` | Published BEA table identifier (`CAGDP2`) | Identify the source economic table |
+| `LineCode` | Numerical line code identifying a statistic or industry | Distinguish industry GDP measures and aggregates |
+| `IndustryClassification` | Industry classification associated with the reported statistic | Reconcile BEA industries with QCEW and NAICS |
+| `Description` | Description of the reported economic measure or industry | Identify individual GDP series |
+| `Unit` | Unit of measurement for the reported values | Establish measurement units and consistency |
+| Annual columns (`2015`, `2016`, etc.) | Reported annual economic estimates | Measure county GDP and industry value added over time |
+
+BEA's CAGDP2 dataset reports GDP in thousands of current U.S. dollars. Industry classifications will require reconciliation with QCEW before combining the datasets. `LineCode` identifies a published BEA statistical or industry line and should not be treated as an interchangeable NAICS code.
+
+**Data transformations:** The variables `year` and `gdp_thousand_usd` are created during R data preparation. They are not original BEA field names. The annual columns are reshaped into `year` and their corresponding GDP values are stored in `gdp_thousand_usd`.
+
+[^bea-source]: U.S. Bureau of Economic Analysis (BEA), [Regional Economic Accounts: Download ZIP Files](https://apps.bea.gov/regional/downloadzip.htm), CAGDP2 dataset; [BEA API User Guide](https://apps.bea.gov/api/_pdf/bea_web_service_api_user_guide.pdf), Regional dataset documentation.
+
+
+
+### Complete BEA Data Collection
+
+The study will retain observations for all 21 counties and all available years within the 2015–2025 study period.
+
+Unlike QCEW, the BEA archive provides historical years as separate columns. These will be converted into annual county-industry observations.
+
+
+```{r prepare-bea}
+# Remove whitespace from county FIPS codes
+bea_ga$GeoFIPS <- trimws(bea_ga$GeoFIPS)
+
+# Identify available study years
+bea_years <- intersect(as.character(years), names(bea_ga))
+
+# Select all 21 counties
+bea_selected <- bea_ga[
+  bea_ga$GeoFIPS %in% unname(county_codes),
+  c("GeoFIPS", "GeoName", "LineCode",
+  "IndustryClassification", "Description", "Unit", bea_years)
+]
+
+# Convert annual columns into individual observations
+bea_raw <- reshape(
+  bea_selected,
+  varying = bea_years,
+  v.names = "gdp_thousand_usd",
+  timevar = "year",
+  times = as.integer(bea_years),
+  idvar = c("GeoFIPS", "LineCode"),
+  direction = "long"
+)
+
+bea_raw$gdp_thousand_usd <- suppressWarnings(
+  as.numeric(gsub(",", "", bea_raw$gdp_thousand_usd))
+)
+
+rownames(bea_raw) <- NULL
+cat("Total number of county-industry-year level records:", nrow(bea_raw), "\n")
+```
+
+#### County GDP Descriptive Statistics
+
+BEA's all-industry GDP total is selected separately to avoid mixing detailed industries with their aggregate totals.
+
+```{r descriptive-stats-bea}
+bea_total <- bea_raw[
+  bea_raw$LineCode == 1,
+]
+
+bea_descriptive_stats <- modelsummary::datasummary_skim(
+  bea_total["gdp_thousand_usd"],
+  type = "numeric",
+  output = "data.frame",
+  fun_numeric = list(
+    N = function(x) sum(!is.na(x)),
+    Mean = function(x) mean(x, na.rm = TRUE),
+    SD = function(x) sd(x, na.rm = TRUE),
+    Min = function(x) min(x, na.rm = TRUE),
+    Median = function(x) median(x, na.rm = TRUE),
+    Max = function(x) max(x, na.rm = TRUE)
+  )
+)
+
+knitr::kable(
+  bea_descriptive_stats,
+  caption = "County GDP Descriptive Statistics, Available Years",
+  digits = 2
+)
+```
+
+*Note: GDP is measured in thousands of current U.S. dollars. Statistics represent county-year observations rather than individual businesses or workers.*
+
+#### Industry GDP Distribution
+
+The following table identifies the BEA industry classifications available for the Atlanta region. Industry GDP values and their shares of regional GDP will be incorporated following data validation.
+
+```{r bea-industry-gdp, results='asis'}
+# 1. Select BEA observations for 2024
+bea_gdp_2024 <- bea_raw |>
+  dplyr::filter(year == 2024)
+
+# 2. Aggregate GDP across Atlanta's 21 counties
+# Keep each BEA reporting line separate
+bea_gdp_distribution <- bea_gdp_2024 |>
+  dplyr::group_by(LineCode, IndustryClassification, Description) |>
+  dplyr::summarise(
+    `GDP (Thousand USD)` = if (anyNA(gdp_thousand_usd)) {
+      NA_real_
+    } else {
+      sum(gdp_thousand_usd)
+    },
+    .groups = "drop"
+  )
+
+# 3. Capture industries with missing GDP before removing them
+bea_gdp_missing <- bea_gdp_distribution |>
+  dplyr::filter(is.na(`GDP (Thousand USD)`))
+
+# 4. Calculate GDP share relative to total regional GDP
+# LineCode 1 represents all-industry GDP
+bea_total_gdp <- bea_gdp_distribution |>
+  dplyr::filter(LineCode == 1) |>
+  dplyr::pull(`GDP (Thousand USD)`)
+
+stopifnot(length(bea_total_gdp) == 1,
+          is.finite(bea_total_gdp),
+          bea_total_gdp > 0)
+
+bea_gdp_distribution <- bea_gdp_distribution |>
+  dplyr::mutate(
+    `GDP Share (%)` = 100 * `GDP (Thousand USD)` / bea_total_gdp
+  ) |>
+  dplyr::filter(!is.na(`GDP (Thousand USD)`)) |>
+  dplyr::arrange(as.numeric(LineCode)) |>
+  dplyr::select(
+    IndustryClassification,
+    Description,
+    `GDP (Thousand USD)`,
+    `GDP Share (%)`
+  )
+
+# 5. Display GDP distribution without LineCode
+print(knitr::kable(
+  bea_gdp_distribution,
+  digits = c(0, 1),
+  format.args = list(big.mark = ","),
+  caption = "Atlanta Regional GDP by BEA Industry, 2024"
+))
+
+# 6. List excluded industries beneath the table
+if (nrow(bea_gdp_missing) > 0) {
+  missing_list <- paste0(
+    bea_gdp_missing$IndustryClassification,
+    " (", bea_gdp_missing$Description, ")",
+    collapse = "; "
+  )
+
+  cat(
+    "\n\n*Note: The following industry classifications were excluded",
+    "because GDP was unavailable for at least one of the 21 counties:",
+    missing_list, "*\n\n"
+  )
+}
+```
+
+
+
+
+### Data Coverage and Validation
+
+The study requires 21 counties for each available year. The coverage table will identify whether the BEA data are available for the complete intended period.
+
+```{r bea-coverage}
+bea_coverage <- data.frame(
+  Year = years,
+  Counties = sapply(years, function(y) {
+    length(unique(bea_total$GeoFIPS[
+      bea_total$year == y &
+      !is.na(bea_total$gdp_thousand_usd)
+    ]))
+  })
+)
+
+knitr::kable(
+  bea_coverage,
+  caption = "BEA County GDP Coverage by Year"
+)
+```
+
+### Initial Observations and Assumptions
+
+- **Observation level:** Each record represents an economic measure or industry classification for a particular county and year.
+- **Geographic coverage:** The target is all 21 Atlanta-area counties.
+- **Temporal coverage:** Historical observations cover 2015–2024 currently, with 2025 retained as the intended study period pending release.
+- **Economic measurement:** County GDP represents value added, not total industry gross output.
+- **Industry classifications:** BEA and QCEW industry definitions must be reconciled before constructing employment-to-output relationships.
+- **Data disclosure:** Confidential or unavailable industry estimates may appear as missing or nonnumeric values.
+- **Model compatibility:** Regional GDP will support economic benchmarking, but separate gross output and interindustry transaction data are necessary to estimate the technical coefficients in Equation (2-1).
+
+The initial review will establish the geographic and temporal coverage of BEA's regional economic estimates and their suitability for integration with QCEW employment data.
+
+
+#### QCEW–BEA Industry Classification Crosswalk
+
+The following table relates QCEW NAICS sectors to the corresponding BEA industry classifications available in the CAGDP2 dataset.[^bea-crosswalk]
+
+
+```{r bea-naics-crosswalk}
+# 1. Retrieve BEA industry classifications
+bea_codes <- unique(trimws(as.character(bea_raw$IndustryClassification)))
+bea_codes <- bea_codes[
+  !is.na(bea_codes) & grepl("^[0-9]", bea_codes)
+]
+
+# 2. Identify the corresponding broad NAICS sector
+get_naics_sector <- function(code) {
+
+  # Separate components within combined codes
+  parts <- trimws(unlist(strsplit(code, "[,-]")))
+
+  sector <- substr(parts, 1, 2)
+
+  # Combine NAICS sectors that use ranges
+  sector[sector %in% c("31", "32", "33")] <- "31-33"
+  sector[sector %in% c("44", "45")] <- "44-45"
+  sector[sector %in% c("48", "49")] <- "48-49"
+
+  sector <- unique(sector)
+
+  # Exclude classifications spanning multiple sectors
+  if (length(sector) == 1) sector else NA_character_
+}
+
+# 3. Match BEA classifications to QCEW sectors
+bea_naics_crosswalk <- data.frame(
+  NAICS = vapply(bea_codes, get_naics_sector, character(1)),
+  BEA = bea_codes
+) |>
+  dplyr::filter(!is.na(NAICS), NAICS %in% sectors) |>
+  dplyr::group_by(NAICS) |>
+  dplyr::summarise(
+    `BEA IndustryClassification` =
+      paste(sort(unique(BEA)), collapse = "; "),
+    .groups = "drop"
+  )
+
+# 4. Retrieve industry labels from QCEW
+qcew_sector_labels <- qcew_raw |>
+  dplyr::filter(industry_code %in% sectors) |>
+  dplyr::distinct(industry_code, .keep_all = TRUE) |>
+  dplyr::transmute(
+    NAICS = industry_code,
+    `Industry Label` = sub("^NAICS [^ ]+ ", "", industry_title)
+  )
+
+# 5. Combine labels, NAICS, and BEA classifications
+bea_naics_crosswalk <- data.frame(NAICS = sectors) |>
+  dplyr::left_join(qcew_sector_labels, by = "NAICS") |>
+  dplyr::left_join(bea_naics_crosswalk, by = "NAICS") |>
+  dplyr::mutate(
+    `BEA IndustryClassification` = tidyr::replace_na(
+      `BEA IndustryClassification`, "Not separately identified"
+    )
+  ) |>
+  dplyr::select(
+    `Industry Label`,
+    NAICS,
+    `BEA IndustryClassification`
+  )
+
+# 6. Display the crosswalk
+knitr::kable(
+  bea_naics_crosswalk,
+  caption = "QCEW NAICS to BEA CAGDP2 Industry Classification Guide"
+)
+```
+
+
+*Note: BEA industry classifications include aggregate and detailed categories that overlap. This table is a reference for identifying related classifications, not a list of values that should be added together. Multi-sector BEA aggregates are excluded from the automated matching table. Government and government enterprises in BEA are not strictly equivalent to QCEW NAICS 92.*
+
+[^bea-crosswalk]: U.S. Bureau of Economic Analysis, [Industry Names to NAICS Codes](https://www.bea.gov/sites/default/files/2023-12/NAICS2017IndustriesRegionalGDP.xlsx); BEA, [GDP by State: Concepts and Methodology, Appendix B, pp. 41–43](https://www.bea.gov/system/files/methodologies/BEA-GDP-by-State-Concepts-and-Methodology.pdf); Bureau of Labor Statistics, [QCEW High-Level Industry Crosswalk](https://www.bls.gov/cew/classifications/industry/high-level-industries.htm).
+
+
+## Prepare County-Level Data
+
+Keep industry observations separate from all-industry totals
+to avoid double counting.
+
+```{r preparation}
+
+```
+
+# Aggregate Regional Employment
+
+Construct regional industry totals by summing reported county
+employment. Track coverage to identify suppressed or missing
+county-industry observations.
+
+```{r regional-aggregation}
+
+```
+
+# 5. Save Prepared Datasets
+
+```{r save-data}
+
+```
+
+
+# 6. Initial Data Review
+
+```{r data-review}
+
+```
+
+# 7. Data Notes
+
+- QCEW records covered jobs, not unique employed residents.
+- All-industry totals are retained separately from NAICS sectors.
+- Some county-industry values may be suppressed.
+- Aggregated industry employment may therefore be incomplete.
+- The 2022–2025 dataset provides an initial comparable industry
+  series; a longer history is needed for forecasting.
+- Full-county aggregation does not represent the exact boundaries
+  of every ARC transportation planning geography.
+
+Data source:
+https://www.bls.gov/cew/additional-resources/open-data/

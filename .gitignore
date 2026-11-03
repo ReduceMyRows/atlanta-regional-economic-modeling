@@ -18,9 +18,17 @@
 # Generated research files
 data/raw/
 outputs/
+*.png
+*_files/
 
 # Temporary files
 *.tmp
 ~$*
 .DS_Store
 Thumbs.db
+
+# Generated images
+*.png
+*_files/
+# Raw datasets
+data/raw/
